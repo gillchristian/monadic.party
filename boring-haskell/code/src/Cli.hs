@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -5,9 +7,46 @@ module Cli
   ( main
   ) where
 
-import qualified Data.ByteString                  as BS
-import qualified Database.PostgreSQL.Simple       as Pg
-import qualified Database.PostgreSQL.Simple.Types as PgTypes
+import qualified Data.ByteString                      as BS
+import qualified Database.PostgreSQL.Simple           as Pg
+import qualified Database.PostgreSQL.Simple.FromField as PgFromField
+import qualified Database.PostgreSQL.Simple.FromRow   as PgFromRow
+import qualified Database.PostgreSQL.Simple.ToField   as PgToField
+import qualified Database.PostgreSQL.Simple.Types     as PgTypes
+import           GHC.Generics                         (Generic)
+
+data EventType
+  = Upgrade
+  | Downgrade
+  deriving (Show, Eq)
+
+-- https://github.com/lpsmith/postgresql-simple/issues/110#issuecomment-497675807
+instance PgFromField.FromField EventType where
+  fromField f (Just "upgrade") = pure Upgrade
+  fromField f (Just "downgrade") = pure Downgrade
+  fromField f (Just bs) =
+    PgFromField.returnError Pg.ConversionFailed f (show bs)
+  fromField f Nothing = PgFromField.returnError Pg.UnexpectedNull f ""
+
+instance PgToField.ToField EventType where
+  toField Upgrade   = PgToField.Escape "upgrade"
+  toField Downgrade = PgToField.Escape "downgrade"
+
+newtype Revision = Revision
+  { rRev :: BS.ByteString
+  } deriving (Show, Eq, Generic, Pg.ToRow)
+
+instance PgFromRow.FromRow Revision where
+  fromRow = Revision <$> PgFromRow.field
+
+data Event = Event
+  { eRev     :: BS.ByteString
+  , eApplied :: BS.ByteString -- TODO: Date?
+  , eType    :: EventType
+  } deriving (Show, Eq, Generic, Pg.ToRow)
+
+instance PgFromRow.FromRow Event where
+  fromRow = Event <$> PgFromRow.field <*> PgFromRow.field <*> PgFromRow.field
 
 executeSqlFile :: Pg.Connection -> FilePath -> IO ()
 executeSqlFile con path = do
@@ -15,12 +54,6 @@ executeSqlFile con path = do
   res <- Pg.execute_ con content
   putStrLn $ "Exit code: " <> show res
 
-{-
--- execute query
-let query = "CREATE TABLE IF NOT EXISTS foo (id bigserial primary key);"
-res <- Pg.execute_ con query
-putStrLn $ "Exit code: " <> show res
--}
 main :: IO ()
 main = do
   putStrLn "Hey Monadic Party!"
