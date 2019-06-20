@@ -222,6 +222,12 @@ let p0IsNoSucc =
     ( \ n' rec_n' eq_0_SSn' ->
       rec_n' (leibniz Nat Nat pred Zero (Succ (Succ n')) eq_0_SSn') )
 
+let fromZeroTo =
+   natElim 
+     (\ n -> Vec Nat (Succ n))
+     (Nil Nat)
+     (\ n' rec_n' -> Cons Nat n' n' rect_n')
+
 -- generate a vector of given length from a specified element (replicate)
 let replicate =
   ( natElim

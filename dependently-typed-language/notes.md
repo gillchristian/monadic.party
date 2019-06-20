@@ -10,7 +10,8 @@ First generalization, we include types:
 forall A : a \x: a -> x
 ```
 
-Then we have functions on type level (e.g. list of type A) and then dependent types.
+Then we have functions on type level (e.g. list of type A) and then dependent
+types.
 
 E.g. vectors dependent on naturals (size) and a type (values of the vector)
 
@@ -43,7 +44,7 @@ We give numbers (indexes) to the variable name so when they have the same name
 
 ```
 (\x -> (\x -> x)) 5 -- we can't replace all the x's with 5, they are different
-(\5 -> 5)          -- we'd get the wrong result
+(\5 -> 5)           -- we'd get the wrong result
 ```
 
 To that example we can assign indexes (outer is 0, inner is 1)
@@ -107,4 +108,31 @@ G |- (e :: p) ::↑ t
 
 > "totally different functions that produce the same results"
 
-To read: [True Concurrency of Deep Inference Proofs](https://drive.google.com/file/d/0B150TbHH-gFtWVE0dGJMOVFEeTQ/view)
+To read:
+[True Concurrency of Deep Inference Proofs](https://drive.google.com/file/d/0B150TbHH-gFtWVE0dGJMOVFEeTQ/view)
+
+---
+
+Playing around with our type system:
+
+```
+LP> let id = (\a x -> x) :: forall (a :: *) (x :: a) . x -> x
+LP> let id = (\a x -> x) :: forall (a :: *) . a -> a
+id :: forall (x :: *) (y :: x) . x
+LP> :t id
+forall (x :: *) (y :: x) . x
+LP> :t id id
+type mismatch:
+type inferred:  forall (x :: *) (y :: x) . x
+type expected:  *
+for expression: id
+LP> :t id (forall (a :: *) . a -> a)
+forall (x :: forall (x :: *) (y :: x) . x) (y :: *) (z :: y) . y
+LP> :t id (forall (a :: *) . a -> a) id
+forall (x :: *) (y :: x) . x
+```
+
+```
+LP> let const = (\ ta tb a b -> a ) :: forall (ta :: *) (tb :: *) (a :: ta) (b :: tb) . ta -> tb -> ta
+const :: forall (x :: *) (y :: *) (z :: x) (a :: y) . x
+```

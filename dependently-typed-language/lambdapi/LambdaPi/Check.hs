@@ -96,7 +96,15 @@ iType_ i g (EqElim_ a m mr x y eq) =
 cType_ :: Int -> (NameEnv Value_,Context_) -> CTerm_ -> Type_ -> Result ()
 cType_ ii g (Inf_ e) v 
   =     do  v' <- iType_ ii g e
-            unless ( quote0_ v == quote0_ v') (throwError ("type mismatch:\n" ++ "type inferred:  " ++ render (cPrint_ 0 0 (quote0_ v')) ++ "\n" ++ "type expected:  " ++ render (cPrint_ 0 0 (quote0_ v)) ++ "\n" ++ "for expression: " ++ render (iPrint_ 0 0 e)))
+            unless ( quote0_ v == quote0_ v') 
+                   (throwError
+                     ("type mismatch:\n" ++
+                       "type inferred:  " ++
+                       render (cPrint_ 0 0 (quote0_ v')) ++
+                       "\n" ++
+                       "type expected:  " ++
+                       render (cPrint_ 0 0 (quote0_ v)) ++
+                       "\n" ++ "for expression: " ++ render (iPrint_ 0 0 e)))
 cType_ ii g (Lam_ e) ( VPi_ ty ty')
   =     cType_  (ii + 1) ((\ (d,g) -> (d,  ((Local ii, ty ) : g))) g)
                 (cSubst_ 0 (Free_ (Local ii)) e) ( ty' (vfree_ (Local ii))) 
