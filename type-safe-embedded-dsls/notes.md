@@ -37,3 +37,19 @@ interpreter :: Primitives -> _
 Language: a set of things and means of combining them, that's a language
 
 DSLs evolve as you build them
+
+---
+
+DSL types:
+
+Monoid      -> accumulate & combine (e.g. describing docs)
+
+Applicative -> non-sequential, parallelize-able, statically analyzable
+
+Monad       -> sequential (depend on previous values)
+
+---
+
+Phantom types to use types to encode transitions
+
+Index Monad :point_up:
