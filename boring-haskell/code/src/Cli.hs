@@ -10,7 +10,6 @@ module Cli
 import qualified Data.ByteString                      as BS
 import qualified Database.PostgreSQL.Simple           as Pg
 import qualified Database.PostgreSQL.Simple.FromField as PgFromField
-import qualified Database.PostgreSQL.Simple.FromRow   as PgFromRow
 import qualified Database.PostgreSQL.Simple.ToField   as PgToField
 import qualified Database.PostgreSQL.Simple.Types     as PgTypes
 import           GHC.Generics                         (Generic)
@@ -32,27 +31,31 @@ instance PgToField.ToField EventType where
   toField Upgrade   = PgToField.Escape "upgrade"
   toField Downgrade = PgToField.Escape "downgrade"
 
-newtype Revision = Revision
-  { rRev :: BS.ByteString
-  } deriving (Show, Eq, Generic, Pg.ToRow)
-
-instance PgFromRow.FromRow Revision where
-  fromRow = Revision <$> PgFromRow.field
+data Revision = Revision
+  { rId  :: Int
+  , rRev :: BS.ByteString
+  } deriving (Show, Eq, Generic, Pg.ToRow, Pg.FromRow)
 
 data Event = Event
-  { eRev     :: BS.ByteString
+  { eId      :: Int
+  , eRev     :: BS.ByteString
   , eApplied :: BS.ByteString -- TODO: Date?
   , eType    :: EventType
-  } deriving (Show, Eq, Generic, Pg.ToRow)
-
-instance PgFromRow.FromRow Event where
-  fromRow = Event <$> PgFromRow.field <*> PgFromRow.field <*> PgFromRow.field
+  } deriving (Show, Eq, Generic, Pg.ToRow, Pg.FromRow)
 
 executeSqlFile :: Pg.Connection -> FilePath -> IO ()
 executeSqlFile con path = do
   content <- PgTypes.Query <$> BS.readFile path
   res <- Pg.execute_ con content
   putStrLn $ "Exit code: " <> show res
+
+markActiveRevision :: Pg.Connection -> Revision -> IO ()
+markActiveRevision con rev = do
+  Pg.execute
+    con
+    "update schemactl_rev set rev = ? where id = ?;"
+    (rRev rev, rId rev)
+  pure ()
 
 main :: IO ()
 main = do
@@ -65,3 +68,7 @@ main = do
           }
   con <- Pg.connect info
   executeSqlFile con "./db/000_bootstrap.sql.up"
+  (res :: [Revision]) <- Pg.query_ con "select * from schemactl_rev"
+  print $ head res
+  let rev2 = Revision 1 "001"
+  markActiveRevision con rev2
