@@ -13,6 +13,7 @@ library:
     - directory
     - postgresql-simple
     - time
+    - attoparsec
 
 executables:
   schemactl:
@@ -35,3 +36,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - schemactl
+    - hspec

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a6d7b863ffd323da3179b46ede1341a7a2e9dca4f4a06a5db10e2e15e1eccc69
+-- hash: 4ee7dfc078bc0f5120185b2503cc2cf740a5fffb5571529aa1eaf29b6d345efe
 
 name:           schemactl
 version:        0.1.0.0
@@ -18,7 +18,8 @@ library
   hs-source-dirs:
       src
   build-depends:
-      base >=4.7 && <5
+      attoparsec
+    , base >=4.7 && <5
     , bytestring
     , directory
     , postgresql-simple
@@ -47,5 +48,6 @@ test-suite schemactl-test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , hspec
     , schemactl
   default-language: Haskell2010
