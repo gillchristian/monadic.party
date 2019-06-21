@@ -7,68 +7,151 @@ module Cli
   ( main
   ) where
 
-import qualified Data.ByteString                      as BS
+import           Control.Monad                        (forM_)
+import qualified Data.ByteString.Char8                as Bs
+import qualified Data.List                            as List
+import           Data.String                          (IsString (..))
+import qualified Data.Time                            as Time
 import qualified Database.PostgreSQL.Simple           as Pg
-import qualified Database.PostgreSQL.Simple.FromField as PgFromField
-import qualified Database.PostgreSQL.Simple.ToField   as PgToField
+import qualified Database.PostgreSQL.Simple.FromField as Pg
+import qualified Database.PostgreSQL.Simple.FromRow   as Pg
+import qualified Database.PostgreSQL.Simple.ToField   as Pg
+import qualified Database.PostgreSQL.Simple.ToRow     as Pg
 import qualified Database.PostgreSQL.Simple.Types     as PgTypes
 import           GHC.Generics                         (Generic)
+import qualified System.Directory                     as Dir
+import qualified System.Exit                          as Exit
+
+main :: IO ()
+main = do
+  let connectInfo =
+        Pg.defaultConnectInfo
+          { Pg.connectUser = "boring-haskell-test"
+          , Pg.connectPassword = "test"
+          , Pg.connectDatabase = "boring-haskell-test"
+          }
+  conn <- Pg.connect connectInfo
+  executeSqlFile conn "db/000_bootstrap.sql.up"
+  activeRev <- getActiveRev conn
+  let allMigrations =
+        [ Migration
+            { mRev = "001"
+            , mDescription = "add_users"
+            , mBaseFile = "db/001_add_users.sql"
+            }
+        , Migration
+            { mRev = "002"
+            , mDescription = "add_sessions"
+            , mBaseFile = "db/002_add_sessions.sql"
+            }
+        ]
+      toRun = getMigrationsToRun activeRev allMigrations
+  forM_ toRun $ runMigration conn Upgrade
+
+getMigrationsToRun :: Rev -> [Migration] -> [Migration]
+getMigrationsToRun activeRev allMigrations = allMigrations
+
+executeSqlFile :: Pg.Connection -> FilePath -> IO ()
+executeSqlFile conn filePath
+  -- Only do this for trusted inputs. This goes around the type safe
+  -- API which prevents SQL injections.
+ = do
+  query <- PgTypes.Query <$> Bs.readFile filePath
+  Pg.execute_ conn query
+  pure ()
+
+runMigration :: Pg.Connection -> EventType -> Migration -> IO NewEvent
+runMigration conn eType migration = do
+  migrationFile <- mFile eType migration
+  let newEvent = fromMigration eType migration
+  Pg.withTransaction conn $ do
+    executeSqlFile conn migrationFile
+    insertNewEvent conn newEvent
+    markActiveRevision conn migration
+  pure newEvent
+
+data Migration = Migration
+  { mRev         :: Rev
+  , mDescription :: Bs.ByteString
+  , mBaseFile    :: FilePath
+  } deriving (Show)
+
+instance Pg.ToRow Rev where
+  toRow rev = [Pg.toField rev]
+
+newtype Rev = Rev
+  { unRev :: Bs.ByteString
+  } deriving (Eq, Show)
+
+instance IsString Rev where
+  fromString = Rev . Bs.pack
+
+instance Pg.ToField Rev where
+  toField = Pg.Escape . unRev
+
+instance Pg.FromField Rev where
+  fromField f dat = Rev <$> Pg.fromField f dat
+
+instance Pg.FromRow Rev where
+  fromRow = Pg.field
+
+mFile :: EventType -> Migration -> IO FilePath
+mFile eType m =
+  case eType of
+    Upgrade   -> mUpgradeFile m
+    Downgrade -> mDowngradeFile m
+
+mUpgradeFile :: Migration -> IO FilePath
+mUpgradeFile migration = do
+  let upgradeFilePath = mBaseFile migration ++ ".up"
+  requireFile upgradeFilePath
+
+mDowngradeFile :: Migration -> IO FilePath
+mDowngradeFile migration = do
+  let downgradeFilePath = mBaseFile migration ++ ".down"
+  requireFile downgradeFilePath
+
+requireFile :: FilePath -> IO FilePath
+requireFile filePath = do
+  res <- Dir.doesFileExist filePath
+  if res
+    then pure filePath
+    else Exit.die $ "file " ++ filePath ++ " required but not found"
 
 data EventType
   = Upgrade
   | Downgrade
   deriving (Show, Eq)
 
--- https://github.com/lpsmith/postgresql-simple/issues/110#issuecomment-497675807
-instance PgFromField.FromField EventType where
-  fromField f (Just "upgrade") = pure Upgrade
-  fromField f (Just "downgrade") = pure Downgrade
-  fromField f (Just bs) =
-    PgFromField.returnError Pg.ConversionFailed f (show bs)
-  fromField f Nothing = PgFromField.returnError Pg.UnexpectedNull f ""
+instance Pg.ToField EventType where
+  toField eventType =
+    case eventType of
+      Upgrade   -> Pg.Escape "upgrade"
+      Downgrade -> Pg.Escape "downgrade"
 
-instance PgToField.ToField EventType where
-  toField Upgrade   = PgToField.Escape "upgrade"
-  toField Downgrade = PgToField.Escape "downgrade"
+data NewEvent = NewEvent
+  { eMigrationRev :: Rev
+  , eType         :: EventType
+  } deriving (Show, Eq, Generic, Pg.ToRow)
 
-data Revision = Revision
-  { rId  :: Int
-  , rRev :: BS.ByteString
-  } deriving (Show, Eq, Generic, Pg.ToRow, Pg.FromRow)
+fromMigration :: EventType -> Migration -> NewEvent
+fromMigration eType migration =
+  NewEvent {eMigrationRev = mRev migration, eType = eType}
 
-data Event = Event
-  { eId      :: Int
-  , eRev     :: BS.ByteString
-  , eApplied :: BS.ByteString -- TODO: Date?
-  , eType    :: EventType
-  } deriving (Show, Eq, Generic, Pg.ToRow, Pg.FromRow)
-
-executeSqlFile :: Pg.Connection -> FilePath -> IO ()
-executeSqlFile con path = do
-  content <- PgTypes.Query <$> BS.readFile path
-  res <- Pg.execute_ con content
-  putStrLn $ "Exit code: " <> show res
-
-markActiveRevision :: Pg.Connection -> Revision -> IO ()
-markActiveRevision con rev = do
+insertNewEvent :: Pg.Connection -> NewEvent -> IO ()
+insertNewEvent conn event = do
   Pg.execute
-    con
-    "update schemactl_rev set rev = ? where id = ?;"
-    (rRev rev, rId rev)
+    conn
+    "insert into schemactl_events (rev, event_type) values (?, ?)"
+    event
   pure ()
 
-main :: IO ()
-main = do
-  putStrLn "Hey Monadic Party!"
-  let info =
-        Pg.defaultConnectInfo
-          { Pg.connectUser = "boring-haskell-test"
-          , Pg.connectPassword = "test"
-          , Pg.connectDatabase = "boring-haskell-test"
-          }
-  con <- Pg.connect info
-  executeSqlFile con "./db/000_bootstrap.sql.up"
-  (res :: [Revision]) <- Pg.query_ con "select * from schemactl_rev"
-  print $ head res
-  let rev2 = Revision 1 "001"
-  markActiveRevision con rev2
+markActiveRevision :: Pg.Connection -> Migration -> IO ()
+markActiveRevision conn migration = do
+  Pg.execute conn "update schemactl_rev set rev = ?" (mRev migration)
+  pure ()
+
+getActiveRev :: Pg.Connection -> IO Rev
+getActiveRev conn = do
+  res <- Pg.query_ conn "select rev from schemactl_rev limit 1"
+  pure (head res) -- Safe, because of our Bootstrap migration
