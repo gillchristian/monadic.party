@@ -145,3 +145,5 @@ f True = Unrestricted True
 f :: x ->. Unrestricted x
 f x = Unrestricted x
 ```
+
+**Paper**: https://www.tweag.io/posts/2017-08-24-linear-types-packed-data.html
