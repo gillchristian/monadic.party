@@ -37,3 +37,4 @@ tests:
     dependencies:
     - schemactl
     - hspec
+    - attoparsec

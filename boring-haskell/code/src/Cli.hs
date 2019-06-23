@@ -10,6 +10,7 @@ import qualified Data.Attoparsec.ByteString.Char8     as P
 import qualified Data.ByteString.Char8                as Bs
 import qualified Data.List                            as L
 import qualified Data.List                            as List
+import qualified Data.Maybe                           as M
 import           Data.String                          (IsString (..))
 import qualified Data.Time                            as Time
 import qualified Database.PostgreSQL.Simple           as Pg
@@ -23,21 +24,34 @@ import qualified System.Directory                     as Dir
 import qualified System.Environment                   as Env
 import qualified System.Exit                          as Exit
 
+-- TODO
+-- [ ] error reporting
+-- [ ] verbose mode
+-- [ ] db info from flags (cli lib?)
+-- [ ] safer types (data Migrations = Migrations Init [Migration])
+-- [ ] specify from/until (if current is higher/lower: fail? do nothing?)
+--       $ schemaclt up 005   # from
+--       $ schemaclt down 005 # until
+connectInfo =
+  Pg.defaultConnectInfo
+    { Pg.connectUser = "boring-haskell-test"
+    , Pg.connectPassword = "test"
+    , Pg.connectDatabase = "boring-haskell-test"
+    }
+
 main :: IO ()
-main = do
-  args <- Env.getArgs
+main = Env.getArgs >>= main'
+
+main' :: [String] -> IO ()
+main' args = do
   event <- dieOnLeft $ parseArgs args
-  let connectInfo =
-        Pg.defaultConnectInfo
-          { Pg.connectUser = "boring-haskell-test"
-          , Pg.connectPassword = "test"
-          , Pg.connectDatabase = "boring-haskell-test"
-          }
+  -- TODO: provide usage info ^^^^^^^
   conn <- Pg.connect connectInfo
+  -- bootstrap migration is idempotent
   executeSqlFile conn "db/000_bootstrap.sql.up"
   activeRev <- getActiveRev conn
   indexFileContent <- Bs.readFile "db/schemactl-index"
-  allMigrations <- dieOnLeft $ P.parseOnly (indexFileP "./db/") indexFileContent
+  allMigrations <- dieOnLeft $ P.parseOnly (indexFileP "db/") indexFileContent
   toRun <- dieOnLeft $ getMigrationsToRun event activeRev allMigrations
   runAll conn event toRun
 
@@ -48,16 +62,21 @@ dieOnLeft :: Either String a -> IO a
 dieOnLeft = either Exit.die pure
 
 setParents :: [Migration] -> [Migration]
-setParents ms = snd $ L.mapAccumL f Nothing ms
-  where
-    f parent m = (Just $ mRev m, m {mParent = parent})
+setParents ms = snd $ L.mapAccumL setParent Nothing ms
+
+setParent :: Maybe Rev -> Migration -> (Maybe Rev, Migration)
+setParent parent m = (Just $ mRev m, m {mParent = parent})
 
 runAll :: Pg.Connection -> EventType -> [Migration] -> IO ()
 runAll conn Upgrade ms   = forM_ ms $ runMigration conn Upgrade
 runAll conn Downgrade ms = forM_ (reverse ms) $ runMigration conn Downgrade
 
 migrationP :: FilePath -> Maybe Rev -> P.Parser Migration
-migrationP base parent = do
+migrationP base parent
+  -- One Migration per line, format:
+  -- "000_bootstrap.sql\n"
+  -- "001_migration_name.sql\n"
+ = do
   rev <- P.takeWhile (/= '_')
   P.char '_'
   desc <- P.takeWhile (/= '.')
@@ -80,66 +99,50 @@ parseArgs _          = Left "Wrong args"
 getMigrationsToRun ::
      EventType -> Rev -> [Migration] -> Either String [Migration]
 getMigrationsToRun event activeRev ms = do
-  let toRun = filterMigrationsToRun event activeRev ms
+  let toRun = filterToRun event activeRev ms
   -- TODO: add validation here
   when False (Left "wrong migration")
   pure toRun
 
-filterMigrationsToRun :: EventType -> Rev -> [Migration] -> [Migration]
-filterMigrationsToRun Upgrade activeRev =
-  filter $ \m -> unRev (mRev m) > unRev activeRev
-filterMigrationsToRun Downgrade activeRev =
+filterToRun :: EventType -> Rev -> [Migration] -> [Migration]
+filterToRun Upgrade activeRev = filter $ \m -> unRev (mRev m) > unRev activeRev
+filterToRun Downgrade activeRev =
   filter $ \m -> unRev (mRev m) <= unRev activeRev
 
 executeSqlFile :: Pg.Connection -> FilePath -> IO ()
 executeSqlFile conn filePath
-  -- Only do this for trusted inputs. This goes around the type safe
-  -- API which prevents SQL injections.
- = do
-  query <- Pg.Query <$> Bs.readFile filePath
-  void $ Pg.execute_ conn query
+  -- Only do this for trusted inputs.
+  -- This goes around the type safe API which prevents SQL injections.
+ = void $ Pg.execute_ conn =<< Pg.Query <$> Bs.readFile filePath
 
--- TODO: simplify/unifiy branches
 runMigration ::
      Pg.Connection -> EventType -> Migration -> IO (Either String NewEvent)
-runMigration conn Upgrade migration = runMigrationUp conn Upgrade migration
+runMigration conn Upgrade migration =
+  runMigration' conn Upgrade (mRev migration) migration
 runMigration conn Downgrade migration =
-  runMigrationDown conn Downgrade migration
+  let rev = M.fromMaybe (mRev migration) $ mParent migration
+   in runMigration' conn Downgrade rev migration
 
-runMigrationUp ::
-     Pg.Connection -> EventType -> Migration -> IO (Either String NewEvent)
-runMigrationUp conn eType migration = do
+runMigration' ::
+     Pg.Connection
+  -> EventType
+  -> Rev
+  -> Migration
+  -> IO (Either String NewEvent)
+runMigration' conn eType rev migration = do
   migrationFile <- mFile eType migration
   let newEvent = fromMigration eType migration
-  -- short circuit here ?
   case migrationFile of
     Just file ->
       Pg.withTransaction conn $ do
         executeSqlFile conn file
         insertNewEvent conn newEvent
-        markActiveRevision conn (mRev migration)
+        markActiveRevision conn rev
         pure $ pure newEvent
     Nothing -> pure $ Left "no file to run"
 
-runMigrationDown ::
-     Pg.Connection -> EventType -> Migration -> IO (Either String NewEvent)
-runMigrationDown conn eType migration = do
-  migrationFile <- mFile eType migration
-  let newEvent = fromMigration eType migration
-  -- short circuit here ?
-  case migrationFile of
-    Just file ->
-      Pg.withTransaction conn $ do
-        executeSqlFile conn file
-        insertNewEvent conn newEvent
-        case mParent migration of
-          Just r  -> markActiveRevision conn r
-          Nothing -> markActiveRevision conn (mRev migration)
-        pure $pure newEvent
-    Nothing -> pure $ Left "no file to run"
-
 -- TODO:
--- Migrations Init [Migration]
+-- data Migrations = Migrations Init [Migration]
 -- Init        -> Bootstrap migration, doesn't have parents
 -- [Migration] -> The rest of the migrations, they have parents
 data Migration = Migration
@@ -147,7 +150,7 @@ data Migration = Migration
   , mDescription :: Bs.ByteString
   , mParent      :: Maybe Rev
   , mBaseFile    :: FilePath
-  } deriving (Show)
+  } deriving (Eq, Show)
 
 instance Pg.ToRow Rev where
   toRow rev = [Pg.toField rev]
