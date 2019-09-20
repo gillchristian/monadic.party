@@ -1,3 +1,5 @@
+Repo: [boring-software](https://github.com/duijf/boring-software)
+
 Maintenance -> more expensinve part of software
 
 Reduce it and reduce software costs

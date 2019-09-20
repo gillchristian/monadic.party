@@ -53,3 +53,7 @@ Monad       -> sequential (depend on previous values)
 Phantom types to use types to encode transitions
 
 Index Monad :point_up:
+
+---
+
+https://github.com/arthurxavierx/monadic-party-edsl

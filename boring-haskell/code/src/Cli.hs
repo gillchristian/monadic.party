@@ -64,6 +64,31 @@ dieOnLeft = either Exit.die pure
 setParents :: [Migration] -> [Migration]
 setParents ms = snd $ L.mapAccumL setParent Nothing ms
 
+setParents' :: [Migration] -> Either String Migrations
+setParents' ms = do
+  init <- maybe (Left "bootstrap migration missing") pure (head' ms)
+  let rest = tail' ms
+  let ms' = snd $ L.mapAccumL setParent' (mRev init) rest
+  let ms'' = zipWith foo ms' rest
+  pure $ Migrations (migrationToInit init) ms''
+
+migrationToInit :: Migration -> Init
+migrationToInit m = Init r d f
+  where
+    r = mRev m
+    d = mDescription m
+    f = mBaseFile m
+
+foo :: Rev -> Migration -> Migration'
+foo rev m = Migration' r d rev f
+  where
+    r = mRev m
+    d = mDescription m
+    f = mBaseFile m
+
+setParent' :: Rev -> Migration -> (Rev, Rev)
+setParent' parent m = (mRev m, parent)
+
 setParent :: Maybe Rev -> Migration -> (Maybe Rev, Migration)
 setParent parent m = (Just $ mRev m, m {mParent = parent})
 
@@ -145,6 +170,24 @@ runMigration' conn eType rev migration = do
 -- data Migrations = Migrations Init [Migration]
 -- Init        -> Bootstrap migration, doesn't have parents
 -- [Migration] -> The rest of the migrations, they have parents
+data Migrations =
+  Migrations Init
+             [Migration']
+  deriving (Eq, Show)
+
+data Init = Init
+  { iRev         :: Rev
+  , iDescription :: Bs.ByteString
+  , iBaseFile    :: FilePath
+  } deriving (Eq, Show)
+
+data Migration' = Migration'
+  { mRev'         :: Rev
+  , mDescription' :: Bs.ByteString
+  , mParent'      :: Rev
+  , mBaseFile'    :: FilePath
+  } deriving (Eq, Show)
+
 data Migration = Migration
   { mRev         :: Rev
   , mDescription :: Bs.ByteString
@@ -215,3 +258,11 @@ getActiveRev :: Pg.Connection -> IO Rev
 getActiveRev conn = do
   res <- Pg.query_ conn "select rev from schemactl_rev limit 1"
   pure (head res) -- Safe, because of our Bootstrap migration
+
+tail' :: [a] -> [a]
+tail' []     = []
+tail' (_:xs) = xs
+
+head' :: [a] -> Maybe a
+head' []    = Nothing
+head' (x:_) = pure x
